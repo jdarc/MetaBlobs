@@ -6,55 +6,50 @@ namespace MetaBlobs
 {
     public class MainGame : Game
     {
-        private const int InitialZoom = 400;
+        private const float InitialZoom = 500.0f;
+        private const float IsoValue = 0.1f;
 
-        private GraphicsDeviceManager _graphics;
-        private Camera _cam;
-        private float _yaw;
-        private float _zoom;
-        private Vector3[] _vertices;
-        private float _pitch;
-        private Vector3[] _normals;
-        private MetaBallGrid _grid;
-        private int _faceCount;
-        private float _isoValue = 0.33333F;
+        private static readonly Random Rnd = new Random(Environment.TickCount);
+
+        private readonly GraphicsDeviceManager _graphics;
+        private Camera _camera;
         private DisplayManager _displayManager;
+        private int _faceCount;
+        private MarchingCubes _marchingCubes;
         private bool _moving;
+        private float _oldPitch;
         private int _oldX;
         private int _oldY;
         private float _oldYaw;
-        private float _oldPitch;
+        private float _pitch;
+        private float _yaw;
+        private float _zoom;
 
         public MainGame()
         {
             _graphics = new GraphicsDeviceManager(this);
-            Content.RootDirectory = "Content";
             IsMouseVisible = true;
         }
 
         protected override void Initialize()
         {
-            _displayManager = new DisplayManager(_graphics);
-
-            _cam = new Camera(Vector3.UnitZ, Vector3.Zero, Vector3.Up, MathHelper.PiOver4, 1, 1, 10000);
-            _yaw = 0.55f;
-            _pitch = -0.5f;
-            _zoom = 400;
-
-            _vertices = new Vector3[65536];
-            _normals = new Vector3[65536];
-
-            _grid = new MetaBallGrid(new Vector3(-200, -200, -200), new Vector3(200, 200, 200), 10);
-            _grid.AddBall(new MetaBall(new Vector3(0, 0, 0), 25));
-
-
-            var rnd = new Random(238943894);
-            for (var i = 0; i < 20; i++)
+            _displayManager = new DisplayManager(_graphics)
             {
-                var rx = (float) (-80 + 160 * rnd.NextDouble());
-                var ry = (float) (-80 + 160 * rnd.NextDouble());
-                var rz = (float) (-80 + 160 * rnd.NextDouble());
-                _grid.AddBall(new MetaBall(new Vector3(rx, ry, rz), 15));
+                SpecularColor = Color.GreenYellow,
+                Lighting = true
+            };
+
+            _camera = new Camera(MathHelper.PiOver4, 1, 1, 2000);
+            _yaw = 0.3f;
+            _pitch = -0.5f;
+
+            _marchingCubes = new MarchingCubes(new Vector3(-100, -100, -100), new Vector3(100, 100, 100), 64);
+            for (var i = 0; i < 32; i++)
+            {
+                var rx = (float) (170 * Rnd.NextDouble() - 85);
+                var ry = (float) (170 * Rnd.NextDouble() - 85);
+                var rz = (float) (170 * Rnd.NextDouble() - 85);
+                _marchingCubes.AddBall(new Sphere(new Vector3(rx, ry, rz), 12));
             }
 
             base.Initialize();
@@ -66,18 +61,64 @@ namespace MetaBlobs
 
         protected override void Update(GameTime gameTime)
         {
-            if (GamePad.GetState(PlayerIndex.One).Buttons.Back == ButtonState.Pressed || Keyboard.GetState().IsKeyDown(Keys.Escape)) Exit();
-
             HandleInput();
-            // _faceCount = _grid.Generate(_vertices, _normals, _isoValue);
-
+            Animate(gameTime.ElapsedGameTime.Milliseconds / 1000.0f);
+            ComputeGrid();
             base.Update(gameTime);
+        }
+
+        protected override void Draw(GameTime gameTime)
+        {
+            Prepare();
+            DrawGrid();
+            DrawIsoSurface();
+            base.Draw(gameTime);
+        }
+
+        private void Prepare()
+        {
+            _displayManager.Clear(new Color(80, 80, 80), 1, 0);
+            _camera.Position = Vector3.TransformNormal(new Vector3(0, 0, _zoom), Matrix.CreateFromYawPitchRoll(_yaw, _pitch, 0));
+            _camera.Target = new Vector3(0, 75, 0);
+            _camera.Up = Vector3.Up;
+            _camera.AspectRatio = _graphics.GraphicsDevice.Viewport.AspectRatio;
+            _displayManager.ViewMatrix = _camera.View;
+            _displayManager.ProjectionMatrix = _camera.Projection;
+        }
+
+        private void DrawGrid()
+        {
+            _displayManager.WorldMatrix = Matrix.Identity;
+            _displayManager.DrawGrid(new Vector3(20, 20, 20), 5, new Color(140, 140, 140), new Color(100, 100, 100));
+        }
+
+        private void DrawIsoSurface()
+        {
+            _displayManager.WorldMatrix = Matrix.CreateTranslation(0, 100, 0);
+            _displayManager.FillTriangleList(_marchingCubes.Vertices, _marchingCubes.Normals, Color.BlueViolet, _faceCount);
+        }
+
+        private void Animate(float dt)
+        {
+            _marchingCubes.Spheres.ForEach(ball =>
+            {
+                ball.Acceleration = 100.0f * (new Vector3(0, 0, 0) - ball.Position) / ball.Position.Length();
+                ball.Integrate(dt);
+            });
+        }
+
+        private void ComputeGrid()
+        {
+            _faceCount = _marchingCubes.Polygonize(IsoValue);
         }
 
         private void HandleInput()
         {
+            if (GamePad.GetState(PlayerIndex.One).Buttons.Back == ButtonState.Pressed ||
+                Keyboard.GetState().IsKeyDown(Keys.Escape)) Exit();
+
             var state = Mouse.GetState();
-            _zoom = InitialZoom - state.ScrollWheelValue * 0.25f;
+            _zoom = Math.Max(200, InitialZoom - state.ScrollWheelValue * 0.25f);
             if (state.LeftButton == ButtonState.Pressed)
             {
                 if (!_moving)
@@ -88,6 +129,7 @@ namespace MetaBlobs
                     _oldYaw = _yaw;
                     _oldPitch = _pitch;
                 }
+
                 _yaw = _oldYaw - (state.X - _oldX) / 100.0f;
                 _pitch = _oldPitch - (state.Y - _oldY) / 100.0f;
             }
@@ -95,23 +137,6 @@ namespace MetaBlobs
             {
                 _moving = false;
             }
-        }
-
-        protected override void Draw(GameTime gameTime)
-        {
-            _displayManager.Clear(new Color(80, 80, 80), 1, 0);
-
-            _cam.Position = Vector3.TransformNormal(new Vector3(0, 0, _zoom), Matrix.CreateFromYawPitchRoll(_yaw, _pitch, 0));
-            _cam.AspectRatio = _graphics.GraphicsDevice.Viewport.AspectRatio;
-
-            _displayManager.ViewMatrix = _cam.View;
-            _displayManager.ProjectionMatrix = _cam.Projection;
-            _displayManager.WorldMatrix = Matrix.Identity;
-            var gray = System.Drawing.Color.FromArgb(140, 140, 140).ToArgb();
-            var dark = System.Drawing.Color.FromArgb(100, 100, 100).ToArgb();
-            _displayManager.DrawGrid3D(new Vector3(20, 20, 20), 10, gray, dark);
-
-            base.Draw(gameTime);
         }
     }
 }

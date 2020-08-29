@@ -5,7 +5,7 @@ using Microsoft.Xna.Framework;
 
 namespace MetaBlobs
 {
-    public sealed class MetaBallGrid
+    public sealed class MarchingCubes
     {
         private static readonly int[] EdgeTable =
         {
@@ -303,239 +303,186 @@ namespace MetaBlobs
             -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1
         };
 
-        private int _gridResolution;
-        private Vector3 _gridMaximum;
-        private Vector3 _gridMinimum;
-        private Vector3[] _gridNormals;
-        private Vector3[] _gridVertices;
-        private float[] _gridValues;
-        private readonly List<Sphere> _metaBalls;
+        private readonly float[] _isoValues;
+        private readonly Vector3[] _normals;
 
-        public MetaBallGrid(Vector3 min, Vector3 max, int resolution)
+        private readonly int _resolution;
+
+        private readonly Vector3[] _vertices;
+        private Action[] _actions;
+
+        public MarchingCubes(Vector3 min, Vector3 max, int resolution)
         {
-            _metaBalls = new List<Sphere>();
+            Spheres = new List<Sphere>();
 
-            _gridMinimum = min;
-            _gridMaximum = max;
-            _gridResolution = resolution;
+            _resolution = resolution;
 
-            _gridValues = new float[resolution * resolution * resolution];
-            _gridVertices = new Vector3[resolution * resolution * resolution];
-            _gridNormals = new Vector3[resolution * resolution * resolution];
+            _isoValues = new float[resolution * resolution * resolution];
+            _vertices = new Vector3[resolution * resolution * resolution];
+            _normals = new Vector3[resolution * resolution * resolution];
 
             var i = 0;
             var dx = (max.X - min.X) / (resolution - 1);
             var dy = (max.Y - min.Y) / (resolution - 1);
             var dz = (max.Z - min.Z) / (resolution - 1);
             for (var z = 0; z < resolution; z++)
-            {
-                for (var y = 0; y < resolution; y++)
-                {
-                    for (var x = 0; x < resolution; x++)
-                    {
-                        _gridVertices[i++] = new Vector3(min.X + dx * x, min.Y + dy * y, min.Z + dz * z);
-                    }
-                }
-            }
+            for (var y = 0; y < resolution; y++)
+            for (var x = 0; x < resolution; x++)
+                _vertices[i++] = new Vector3(min.X + dx * x, min.Y + dy * y, min.Z + dz * z);
         }
 
-        public List<Sphere> Balls => _metaBalls;
+        public List<Sphere> Spheres { get; }
+
+        public Vector3[] Vertices { get; } = new Vector3[65536 * 3];
+
+        public Vector3[] Normals { get; } = new Vector3[65536 * 3];
 
         public void AddBall(Sphere sphere)
         {
-            _metaBalls.Add(sphere);
+            Spheres.Add(sphere);
         }
 
-        public void Compute()
+        public int Polygonize(float isoValue)
         {
-            Array.Clear(_gridValues, 0, _gridValues.Length);
-            Array.Clear(_gridNormals, 0, _gridNormals.Length);
-            
-            var gdx = _gridResolution / (_gridMaximum.X - _gridMinimum.X);
-            var gdy = _gridResolution / (_gridMaximum.Y - _gridMinimum.Y);
-            var gdz = _gridResolution / (_gridMaximum.Z - _gridMinimum.Z);
-            foreach (var ball in _metaBalls)
-            {
-                var (bx, by, bz) = ball.Position;
-                var rad = ball.Radius;
-                var radius2 = rad * rad;
-                var (bmx, bmy, bmz) = new Vector3(bx - radius2, by - radius2, bz - radius2);
-                var (bax, bay, baz) = new Vector3(bx + radius2, by + radius2, bz + radius2);
+            ComputeIsoValues();
 
-                var minX = (int) Math.Max(Math.Floor(gdx * (bmx - _gridMinimum.X)) - 1, 0);
-                var minY = (int) Math.Max(Math.Floor(gdy * (bmy - _gridMinimum.Y)) - 1, 0);
-                var minZ = (int) Math.Max(Math.Floor(gdz * (bmz - _gridMinimum.Z)) - 1, 0);
-                var maxX = (int) Math.Min(Math.Ceiling(gdx * (bax - _gridMinimum.X)) + 1, _gridResolution);
-                var maxY = (int) Math.Min(Math.Ceiling(gdy * (bay - _gridMinimum.Y)) + 1, _gridResolution);
-                var maxZ = (int) Math.Min(Math.Ceiling(gdz * (baz - _gridMinimum.Z)) + 1, _gridResolution);
-
-                Parallel.For(minZ, maxZ, z =>
-                {
-                    for (var y = minY; y < maxY; y++)
-                    {
-                        for (var x = minX; x < maxX; x++)
-                        {
-                            var index = x + y * _gridResolution + z * _gridResolution * _gridResolution;
-                            var (vx, vy, vz) = _gridVertices[index];
-                            var cx = vx - bx;
-                            var cy = vy - by;
-                            var cz = vz - bz;
-                            var dist = cx * cx + cy * cy + cz * cz;
-                            if (dist > 0)
-                            {
-                                var d = rad / (dist * dist);
-                                _gridValues[index] += d * dist;
-                                _gridNormals[index] += new Vector3(d * cx, d * cy, d * cz);
-                            } 
-                        }
-                    }
-                });
-            }
-
-            for (var i = 0; i < _gridNormals.Length; i++) _gridNormals[i].Normalize();
-        }
-
-        public int Generate(Vector3[] vertexBuffer, Vector3[] normalBuffer, float isoValue)
-        {
+            var vs = new Vector3[12];
+            var ns = new Vector3[12];
+            var res = _resolution - 1;
             var totalFaces = 0;
-            if (vertexBuffer != null && normalBuffer != null)
+            var offset = 0;
+            for (var z = 0; z < res; z++)
             {
-                var vs = new Vector3[12];
-                var ns = new Vector3[12];
-                var res = _gridResolution - 1;
-                var offset = 0;
-                for (var z = 0; z < res; z++)
+                var memZ0 = z * _resolution * _resolution;
+                var memZ1 = memZ0 + _resolution * _resolution;
+                for (var y = 0; y < res; y++)
                 {
-                    var memz0 = z * _gridResolution * _gridResolution;
-                    var memz1 = memz0 + _gridResolution * _gridResolution;
-                    for (var y = 0; y < res; y++)
+                    var memY0 = y * _resolution;
+                    var memY1 = memY0 + _resolution;
+                    var m0 = memY0 + memZ0 + 0;
+                    var m1 = memY0 + memZ0 + 1;
+                    var m2 = memY0 + memZ1 + 1;
+                    var m3 = memY0 + memZ1 + 0;
+                    var m4 = memY1 + memZ0 + 0;
+                    var m5 = memY1 + memZ0 + 1;
+                    var m6 = memY1 + memZ1 + 1;
+                    var m7 = memY1 + memZ1 + 0;
+                    for (var x = 0; x < res; x++)
                     {
-                        var memy0 = y * _gridResolution;
-                        var memy1 = memy0 + _gridResolution;
-                        var m0 = memy0 + memz0 + 0;
-                        var m1 = memy0 + memz0 + 1;
-                        var m2 = memy0 + memz1 + 1;
-                        var m3 = memy0 + memz1 + 0;
-                        var m4 = memy1 + memz0 + 0;
-                        var m5 = memy1 + memz0 + 1;
-                        var m6 = memy1 + memz1 + 1;
-                        var m7 = memy1 + memz1 + 0;
-                        for (var x = 0; x < res; x++)
+                        var cubeIndex = 0;
+                        if (_isoValues[m0] < isoValue) cubeIndex |= 1;
+                        if (_isoValues[m1] < isoValue) cubeIndex |= 2;
+                        if (_isoValues[m2] < isoValue) cubeIndex |= 4;
+                        if (_isoValues[m3] < isoValue) cubeIndex |= 8;
+                        if (_isoValues[m4] < isoValue) cubeIndex |= 16;
+                        if (_isoValues[m5] < isoValue) cubeIndex |= 32;
+                        if (_isoValues[m6] < isoValue) cubeIndex |= 64;
+                        if (_isoValues[m7] < isoValue) cubeIndex |= 128;
+
+                        // Only if cube is not entirely in/out of the surface
+                        var triangleCount = 0;
+                        var edgeMask = EdgeTable[cubeIndex];
+                        if (edgeMask != 0)
                         {
-                            var triangleCount = 0;
-                            var cubeindex = 0;
-                            if (_gridValues[m0] < isoValue) cubeindex |= 1;
-                            if (_gridValues[m1] < isoValue) cubeindex |= 2;
-                            if (_gridValues[m2] < isoValue) cubeindex |= 4;
-                            if (_gridValues[m3] < isoValue) cubeindex |= 8;
-                            if (_gridValues[m4] < isoValue) cubeindex |= 16;
-                            if (_gridValues[m5] < isoValue) cubeindex |= 32;
-                            if (_gridValues[m6] < isoValue) cubeindex |= 64;
-                            if (_gridValues[m7] < isoValue) cubeindex |= 128;
-
-                            // Only if cube is not entirely in/out of the surface
-                            var edgeMask = EdgeTable[cubeindex];
-                            if (edgeMask != 0)
+                            // Find the vertices where the surface intersects the cube
+                            if ((edgeMask & 1) > 0)
                             {
-                                // Find the vertices where the surface intersects the cube
-                                if ((edgeMask & 1) > 0)
-                                {
-                                    vs[0] = Interpolate(isoValue, _gridVertices[m0], _gridVertices[m1], _gridValues[m0], _gridValues[m1]);
-                                    ns[0] = Interpolate(isoValue, _gridNormals[m0], _gridNormals[m1], _gridValues[m0], _gridValues[m1]);
-                                }
-
-                                if ((edgeMask & 2) > 0)
-                                {
-                                    vs[1] = Interpolate(isoValue, _gridVertices[m1], _gridVertices[m2], _gridValues[m1], _gridValues[m2]);
-                                    ns[1] = Interpolate(isoValue, _gridNormals[m1], _gridNormals[m2], _gridValues[m1], _gridValues[m2]);
-                                }
-
-                                if ((edgeMask & 4) > 0)
-                                {
-                                    vs[2] = Interpolate(isoValue, _gridVertices[m2], _gridVertices[m3], _gridValues[m2], _gridValues[m3]);
-                                    ns[2] = Interpolate(isoValue, _gridNormals[m2], _gridNormals[m3], _gridValues[m2], _gridValues[m3]);
-                                }
-
-                                if ((edgeMask & 8) > 0)
-                                {
-                                    vs[3] = Interpolate(isoValue, _gridVertices[m3], _gridVertices[m0], _gridValues[m3], _gridValues[m0]);
-                                    ns[3] = Interpolate(isoValue, _gridNormals[m3], _gridNormals[m0], _gridValues[m3], _gridValues[m0]);
-                                }
-
-                                if ((edgeMask & 16) > 0)
-                                {
-                                    vs[4] = Interpolate(isoValue, _gridVertices[m4], _gridVertices[m5], _gridValues[m4], _gridValues[m5]);
-                                    ns[4] = Interpolate(isoValue, _gridNormals[m4], _gridNormals[m5], _gridValues[m4], _gridValues[m5]);
-                                }
-
-                                if ((edgeMask & 32) > 0)
-                                {
-                                    vs[5] = Interpolate(isoValue, _gridVertices[m5], _gridVertices[m6], _gridValues[m5], _gridValues[m6]);
-                                    ns[5] = Interpolate(isoValue, _gridNormals[m5], _gridNormals[m6], _gridValues[m5], _gridValues[m6]);
-                                }
-
-                                if ((edgeMask & 64) > 0)
-                                {
-                                    vs[6] = Interpolate(isoValue, _gridVertices[m6], _gridVertices[m7], _gridValues[m6], _gridValues[m7]);
-                                    ns[6] = Interpolate(isoValue, _gridNormals[m6], _gridNormals[m7], _gridValues[m6], _gridValues[m7]);
-                                }
-
-                                if ((edgeMask & 128) > 0)
-                                {
-                                    vs[7] = Interpolate(isoValue, _gridVertices[m7], _gridVertices[m4], _gridValues[m7], _gridValues[m4]);
-                                    ns[7] = Interpolate(isoValue, _gridNormals[m7], _gridNormals[m4], _gridValues[m7], _gridValues[m4]);
-                                }
-
-                                if ((edgeMask & 256) > 0)
-                                {
-                                    vs[8] = Interpolate(isoValue, _gridVertices[m0], _gridVertices[m4], _gridValues[m0], _gridValues[m4]);
-                                    ns[8] = Interpolate(isoValue, _gridNormals[m0], _gridNormals[m4], _gridValues[m0], _gridValues[m4]);
-                                }
-
-                                if ((edgeMask & 512) > 0)
-                                {
-                                    vs[9] = Interpolate(isoValue, _gridVertices[m1], _gridVertices[m5], _gridValues[m1], _gridValues[m5]);
-                                    ns[9] = Interpolate(isoValue, _gridNormals[m1], _gridNormals[m5], _gridValues[m1], _gridValues[m5]);
-                                }
-
-                                if ((edgeMask & 1024) > 0)
-                                {
-                                    vs[10] = Interpolate(isoValue, _gridVertices[m2], _gridVertices[m6], _gridValues[m2], _gridValues[m6]);
-                                    ns[10] = Interpolate(isoValue, _gridNormals[m2], _gridNormals[m6], _gridValues[m2], _gridValues[m6]);
-                                }
-
-                                if ((edgeMask & 2048) > 0)
-                                {
-                                    vs[11] = Interpolate(isoValue, _gridVertices[m3], _gridVertices[m7], _gridValues[m3], _gridValues[m7]);
-                                    ns[11] = Interpolate(isoValue, _gridNormals[m3], _gridNormals[m7], _gridValues[m3], _gridValues[m7]);
-                                }
-
-                                // Create the triangle
-                                var index = cubeindex << 4;
-                                while (TriTable[index] != -1)
-                                {
-                                    vertexBuffer[offset + 0] = vs[TriTable[index + 0]];
-                                    vertexBuffer[offset + 1] = vs[TriTable[index + 1]];
-                                    vertexBuffer[offset + 2] = vs[TriTable[index + 2]];
-                                    normalBuffer[offset + 0] = ns[TriTable[index + 0]];
-                                    normalBuffer[offset + 1] = ns[TriTable[index + 1]];
-                                    normalBuffer[offset + 2] = ns[TriTable[index + 2]];
-                                    offset += 3;
-                                    index += 3;
-                                    triangleCount++;
-                                }
+                                vs[0] = Interpolate(isoValue, ref _vertices[m0], ref _vertices[m1], _isoValues[m0], _isoValues[m1]);
+                                ns[0] = Interpolate(isoValue, ref _normals[m0], ref _normals[m1], _isoValues[m0], _isoValues[m1]);
                             }
 
-                            totalFaces += triangleCount;
-                            m0++;
-                            m1++;
-                            m2++;
-                            m3++;
-                            m4++;
-                            m5++;
-                            m6++;
-                            m7++;
+                            if ((edgeMask & 2) > 0)
+                            {
+                                vs[1] = Interpolate(isoValue, ref _vertices[m1], ref _vertices[m2], _isoValues[m1], _isoValues[m2]);
+                                ns[1] = Interpolate(isoValue, ref _normals[m1], ref _normals[m2], _isoValues[m1], _isoValues[m2]);
+                            }
+
+                            if ((edgeMask & 4) > 0)
+                            {
+                                vs[2] = Interpolate(isoValue, ref _vertices[m2], ref _vertices[m3], _isoValues[m2], _isoValues[m3]);
+                                ns[2] = Interpolate(isoValue, ref _normals[m2], ref _normals[m3], _isoValues[m2], _isoValues[m3]);
+                            }
+
+                            if ((edgeMask & 8) > 0)
+                            {
+                                vs[3] = Interpolate(isoValue, ref _vertices[m3], ref _vertices[m0], _isoValues[m3], _isoValues[m0]);
+                                ns[3] = Interpolate(isoValue, ref _normals[m3], ref _normals[m0], _isoValues[m3], _isoValues[m0]);
+                            }
+
+                            if ((edgeMask & 16) > 0)
+                            {
+                                vs[4] = Interpolate(isoValue, ref _vertices[m4], ref _vertices[m5], _isoValues[m4], _isoValues[m5]);
+                                ns[4] = Interpolate(isoValue, ref _normals[m4], ref _normals[m5], _isoValues[m4], _isoValues[m5]);
+                            }
+
+                            if ((edgeMask & 32) > 0)
+                            {
+                                vs[5] = Interpolate(isoValue, ref _vertices[m5], ref _vertices[m6], _isoValues[m5], _isoValues[m6]);
+                                ns[5] = Interpolate(isoValue, ref _normals[m5], ref _normals[m6], _isoValues[m5], _isoValues[m6]);
+                            }
+
+                            if ((edgeMask & 64) > 0)
+                            {
+                                vs[6] = Interpolate(isoValue, ref _vertices[m6], ref _vertices[m7], _isoValues[m6], _isoValues[m7]);
+                                ns[6] = Interpolate(isoValue, ref _normals[m6], ref _normals[m7], _isoValues[m6], _isoValues[m7]);
+                            }
+
+                            if ((edgeMask & 128) > 0)
+                            {
+                                vs[7] = Interpolate(isoValue, ref _vertices[m7], ref _vertices[m4], _isoValues[m7], _isoValues[m4]);
+                                ns[7] = Interpolate(isoValue, ref _normals[m7], ref _normals[m4], _isoValues[m7], _isoValues[m4]);
+                            }
+
+                            if ((edgeMask & 256) > 0)
+                            {
+                                vs[8] = Interpolate(isoValue, ref _vertices[m0], ref _vertices[m4], _isoValues[m0], _isoValues[m4]);
+                                ns[8] = Interpolate(isoValue, ref _normals[m0], ref _normals[m4], _isoValues[m0], _isoValues[m4]);
+                            }
+
+                            if ((edgeMask & 512) > 0)
+                            {
+                                vs[9] = Interpolate(isoValue, ref _vertices[m1], ref _vertices[m5], _isoValues[m1], _isoValues[m5]);
+                                ns[9] = Interpolate(isoValue, ref _normals[m1], ref _normals[m5], _isoValues[m1], _isoValues[m5]);
+                            }
+
+                            if ((edgeMask & 1024) > 0)
+                            {
+                                vs[10] = Interpolate(isoValue, ref _vertices[m2], ref _vertices[m6], _isoValues[m2], _isoValues[m6]);
+                                ns[10] = Interpolate(isoValue, ref _normals[m2], ref _normals[m6], _isoValues[m2], _isoValues[m6]);
+                            }
+
+                            if ((edgeMask & 2048) > 0)
+                            {
+                                vs[11] = Interpolate(isoValue, ref _vertices[m3], ref _vertices[m7], _isoValues[m3], _isoValues[m7]);
+                                ns[11] = Interpolate(isoValue, ref _normals[m3], ref _normals[m7], _isoValues[m3], _isoValues[m7]);
+                            }
+
+                            // Create the triangle
+                            var index = cubeIndex << 4;
+                            while (TriTable[index] != -1)
+                            {
+                                Vertices[offset] = vs[TriTable[index]];
+                                Normals[offset++] = ns[TriTable[index++]];
+                                
+                                Vertices[offset] = vs[TriTable[index]];
+                                Normals[offset++] = ns[TriTable[index++]];
+                                
+                                Vertices[offset] = vs[TriTable[index]];
+                                Normals[offset++] = ns[TriTable[index++]];
+                                
+                                triangleCount++;
+                            }
                         }
+
+                        totalFaces += triangleCount;
+                        m0++;
+                        m1++;
+                        m2++;
+                        m3++;
+                        m4++;
+                        m5++;
+                        m6++;
+                        m7++;
                     }
                 }
             }
@@ -543,16 +490,78 @@ namespace MetaBlobs
             return totalFaces;
         }
 
-        private static Vector3 Interpolate(float isoLevel, Vector3 v1, Vector3 v2, float a, float b)
+        private void ComputeIsoValues()
+        {
+            if (_actions == null)
+            {
+                const int blockSize = 8;
+                var actions = new List<Action>();
+                for (var z = 0; z < blockSize; z++)
+                for (var y = 0; y < blockSize; y++)
+                for (var x = 0; x < blockSize; x++)
+                {
+                    var minX = x * blockSize;
+                    var minY = y * blockSize;
+                    var minZ = z * blockSize;
+                    actions.Add(() => ComputeBlock(minX, minY, minZ, minX + blockSize, minY + blockSize, minZ + blockSize));
+                }
+                _actions = actions.ToArray();
+            }
+
+            Array.Clear(_isoValues, 0, _isoValues.Length);
+            Array.Clear(_normals, 0, _normals.Length);
+            Parallel.Invoke(_actions);
+            
+            foreach (var normal in _normals) normal.Normalize();
+        }
+
+        private void ComputeBlock(int minX, int minY, int minZ, int maxX, int maxY, int maxZ)
+        {
+            var spheres = Spheres.ToArray();
+            for (var z = minZ; z < maxZ; z++)
+            {
+                var zres = z * _resolution * _resolution;
+                for (var y = minY; y < maxY; y++)
+                {
+                    var yres = y * _resolution;
+                    for (var x = minX; x < maxX; x++)
+                    {
+                        var index = x + yres + zres;
+                        var (vx, vy, vz) = _vertices[index];
+                        var isoValue = 0f;
+                        var normal = Vector3.Zero;
+                        foreach (var sphere in spheres)
+                        {
+                            var (bx, by, bz) = sphere.Position;
+                            var cx = vx - bx;
+                            var cy = vy - by;
+                            var cz = vz - bz;
+                            var dist = cx * cx + cy * cy + cz * cz;
+                            if (dist <= 0) continue;
+                            var d = sphere.Radius / (dist * dist);
+                            isoValue += d * dist;
+                            normal.X += d * cx;
+                            normal.Y += d * cy;
+                            normal.Z += d * cz;
+                        }
+                        _isoValues[index] += isoValue;
+                        _normals[index] += normal;
+                    }
+                }
+            }
+        }
+
+        private static Vector3 Interpolate(float isoLevel, ref Vector3 v1, ref Vector3 v2, float a, float b)
         {
             if (Math.Abs(isoLevel - a) < 0.00001) return v1;
             if (Math.Abs(isoLevel - b) < 0.00001) return v2;
             if (Math.Abs(a - b) < 0.00001) return v1;
             var mu = (isoLevel - a) / (b - a);
-            var x = v1.X + mu * (v2.X - v1.X);
-            var y = v1.Y + mu * (v2.Y - v1.Y);
-            var z = v1.Z + mu * (v2.Z - v1.Z);
-            return new Vector3(x, y, z);
+            return new Vector3(
+                v1.X + mu * (v2.X - v1.X),
+                v1.Y + mu * (v2.Y - v1.Y),
+                v1.Z + mu * (v2.Z - v1.Z)
+            );
         }
     }
 }

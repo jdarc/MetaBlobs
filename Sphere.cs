@@ -2,9 +2,9 @@ using Microsoft.Xna.Framework;
 
 namespace MetaBlobs
 {
-    public sealed class Ball
+    public sealed class Sphere
     {
-        public Ball(Vector3 position, float radius)
+        public Sphere(Vector3 position, float radius)
         {
             Acceleration = new Vector3(0, 0, 0);
             Velocity = new Vector3(0, 0, 0);

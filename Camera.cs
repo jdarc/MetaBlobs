@@ -1,62 +1,34 @@
 using Microsoft.Xna.Framework;
 
-namespace MetaBlobs {
-    public sealed class Camera {
-        private Vector3 _position;
-        private Vector3 _target;
-        private Vector3 _upVector;
-        private float _fov;
-        private float _aspectRatio;
-        private float _near;
-        private float _far;
-
-        public Vector3 Position {
-            get => _position;
-            set => _position = value;
+namespace MetaBlobs
+{
+    public sealed class Camera
+    {
+        public Camera(float fov, float aspectRatio, float near, float far)
+        {
+            FieldOfView = fov;
+            AspectRatio = aspectRatio;
+            NearPlane = near;
+            FarPlane = far;
+            Up = Vector3.Up;
         }
 
-        public Vector3 Target {
-            get => _target;
-            set => _target = value;
-        }
+        public Vector3 Position { get; set; }
 
-        public Vector3 Up {
-            get => _upVector;
-            set => _upVector = value;
-        }
+        public Vector3 Target { get; set; }
 
-        public float FieldOfView {
-            get => _fov;
-            set => _fov = value;
-        }
+        public Vector3 Up { get; set; }
 
-        public float AspectRatio {
-            get => _aspectRatio;
-            set => _aspectRatio = value;
-        }
+        public float FieldOfView { get; set; }
 
-        public float NearPlane {
-            get => _near;
-            set => _near = value;
-        }
+        public float AspectRatio { get; set; }
 
-        public float FarPlane {
-            get => _far;
-            set => _far = value;
-        }
+        public float NearPlane { get; set; }
 
-        public Camera(Vector3 position, Vector3 target, Vector3 upVector, float fov, float aspectRatio, float near, float far) {
-            _position = position;
-            _target = target;
-            _upVector = upVector;
-            _fov = fov;
-            _aspectRatio = aspectRatio;
-            _near = near;
-            _far = far;
-        }
+        public float FarPlane { get; set; }
 
-        public Matrix View => Matrix.CreateLookAt(_position, _target, _upVector);
+        public Matrix View => Matrix.CreateLookAt(Position, Target, Up);
 
-        public Matrix Projection => Matrix.CreatePerspectiveFieldOfView(_fov, _aspectRatio, _near, _far);
+        public Matrix Projection => Matrix.CreatePerspectiveFieldOfView(FieldOfView, AspectRatio, NearPlane, FarPlane);
     }
 }
