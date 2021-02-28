@@ -55,19 +55,19 @@ namespace MetaBlobs
 
         public Color AmbientLightColor
         {
-            get => new Color(_basicEffect.AmbientLightColor);
+            get => new(_basicEffect.AmbientLightColor);
             set => _basicEffect.AmbientLightColor = value.ToVector3();
         }
 
         public Color DiffuseColor
         {
-            get => new Color(_basicEffect.DiffuseColor);
+            get => new(_basicEffect.DiffuseColor);
             set => _basicEffect.DiffuseColor = value.ToVector3();
         }
 
         public Color SpecularColor
         {
-            get => new Color(_basicEffect.SpecularColor);
+            get => new(_basicEffect.SpecularColor);
             set => _basicEffect.SpecularColor = value.ToVector3();
         }
 

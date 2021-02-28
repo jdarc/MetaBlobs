@@ -9,7 +9,7 @@ namespace MetaBlobs
         private const float InitialZoom = 500.0f;
         private const float IsoValue = 0.1f;
 
-        private static readonly Random Rnd = new Random(Environment.TickCount);
+        private static readonly Random Rnd = new(Environment.TickCount);
 
         private readonly GraphicsDeviceManager _graphics;
         private Camera _camera;
@@ -78,7 +78,8 @@ namespace MetaBlobs
         private void Prepare()
         {
             _displayManager.Clear(new Color(80, 80, 80), 1, 0);
-            _camera.Position = Vector3.TransformNormal(new Vector3(0, 0, _zoom), Matrix.CreateFromYawPitchRoll(_yaw, _pitch, 0));
+            var fromYawPitchRoll = Matrix.CreateFromYawPitchRoll(_yaw, _pitch, 0);
+            _camera.Position = Vector3.TransformNormal(new Vector3(0, 0, _zoom), fromYawPitchRoll);
             _camera.Target = new Vector3(0, 75, 0);
             _camera.Up = Vector3.Up;
             _camera.AspectRatio = _graphics.GraphicsDevice.Viewport.AspectRatio;
@@ -95,7 +96,9 @@ namespace MetaBlobs
         private void DrawIsoSurface()
         {
             _displayManager.WorldMatrix = Matrix.CreateTranslation(0, 100, 0);
-            _displayManager.FillTriangleList(_marchingCubes.Vertices, _marchingCubes.Normals, Color.BlueViolet, _faceCount);
+            var marchingCubesVertices = _marchingCubes.Vertices;
+            var marchingCubesNormals = _marchingCubes.Normals;
+            _displayManager.FillTriangleList(marchingCubesVertices, marchingCubesNormals, Color.BlueViolet, _faceCount);
         }
 
         private void Animate(float dt)
